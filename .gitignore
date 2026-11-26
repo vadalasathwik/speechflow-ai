@@ -18,8 +18,12 @@ audio/
 *.wav
 *.mp3
 *.m4a
+*.mp4
 *.webm
 models/
+model-cache/
+backend/model-cache/
+*.bin
 .cache/huggingface/
 .cache/whisper/
 .DS_Store
