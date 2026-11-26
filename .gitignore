@@ -23,6 +23,8 @@ audio/
 models/
 model-cache/
 backend/model-cache/
+!backend/app/models/
+!backend/app/models/*.py
 *.bin
 .cache/huggingface/
 .cache/whisper/
