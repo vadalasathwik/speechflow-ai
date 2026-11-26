@@ -1,1 +1,1 @@
-"""Pydantic request and response contracts."""
+"""Pydantic API contracts."""

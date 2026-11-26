@@ -7,7 +7,7 @@
 - PostgreSQL is the system of record. SQLAlchemy models inherit from `app.db.base.Base`; schema changes require Alembic migrations.
 - `app.services.transcription` owns batch Faster-Whisper inference. Keep provider-specific code behind this service boundary.
 - Browser recording is owned by `frontend/src/hooks/use-audio-recorder.ts`; it must release media tracks, timers, audio contexts, and object URLs on every end path.
-- WebSockets, microphone streaming, transcript CRUD, and authentication remain out of scope.
+- WebSockets, microphone streaming, and transcript CRUD are implemented; authentication and transcript ownership isolation remain future work.
 
 ## Standards
 

@@ -2,7 +2,7 @@
 
 SpeechFlow AI is an open-source Faster-Whisper speech-to-text application for the Procucev AI Tech Hiring Assignment. It automatically recognizes English, Hindi, and Hindi-English mixed speech, preserving the original spoken language. It provides buffered near-real-time WebSocket transcription and batch transcription for uploaded audio.
 
-The wider assignment also calls for relational persistence, a transcription dashboard with CRUD, GitHub publication, and cloud deployment. Those are not implemented in this scope-correction task and must be completed separately.
+The wider assignment also calls for a transcription history dashboard, GitHub publication, and cloud deployment. Persistent PostgreSQL CRUD is implemented; the dashboard and deployment remain future phases.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ pip install -e '.[dev]'
 uvicorn app.main:app --reload --port 8000
 ```
 
-Health check: [http://localhost:8000/api/health](http://localhost:8000/api/health). Apply future schema changes with `alembic upgrade head`.
+Health check: [http://localhost:8000/api/health](http://localhost:8000/api/health). Apply the transcription schema before using the CRUD endpoints with `alembic upgrade head`.
 
 Run the frontend from `frontend/`:
 
@@ -74,6 +74,23 @@ backend/.venv/bin/pip install -e 'backend[dev]'
 | `frontend/.env.local` | Browser-visible backend base URL |
 
 `ALLOWED_ORIGINS` is a JSON list, e.g. `ALLOWED_ORIGINS=["http://localhost:3000"]`.
+
+### Neon PostgreSQL
+
+For a Neon database, set `DATABASE_URL` only in the ignored `backend/.env` file. Use the SQLAlchemy Psycopg driver prefix and require TLS; obtain the host, database, user, and password from the Neon connection details.
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<neon-host>/<database>?sslmode=require&channel_binding=require
+```
+
+Never put a real connection string in `.env.example`, source control, browser environment variables, or client-side code. Verify and apply the schema against the configured database with:
+
+```bash
+cd backend
+.venv/bin/alembic current
+.venv/bin/alembic upgrade head
+.venv/bin/alembic current
+```
 
 Backend speech settings are configured in `backend/.env`. `WHISPER_MODEL` accepts either a Faster-Whisper model name (for example, `small`) or an absolute directory containing a locally downloaded CTranslate2 model. Keep local model directories outside the repository and set their path only in the ignored local `backend/.env`. The current development setup uses the locally downloaded `large-v3-turbo` model with `WHISPER_DEVICE=cpu` and `WHISPER_COMPUTE_TYPE=int8`; deployments can select a smaller model instead.
 
@@ -110,6 +127,31 @@ The browser captures microphone PCM through an AudioWorklet and streams it to `w
 
 SpeechFlow uses `task="transcribe"` exclusively. It never automatically translates a transcript. A bounded Hindi corrective pass is used only when an automatic Arabic-script result has meaningful Hindi detection evidence and the candidate produces non-repetitive Devanagari text.
 
+## Persistent transcriptions API
+
+PostgreSQL stores finalized transcript text and metadata only; audio files are never persisted. Run migrations before starting the API:
+
+```bash
+cd backend
+.venv/bin/alembic upgrade head
+```
+
+`POST /api/transcriptions` creates a record. `GET /api/transcriptions` lists newest-first records with `page`, `page_size` (maximum 100), optional `search`, and optional `language`. `GET`, `PATCH`, and `DELETE /api/transcriptions/{id}` retrieve, update title/text, and delete a UUID record respectively.
+
+```bash
+curl -X POST http://localhost:8000/api/transcriptions \
+  -H 'content-type: application/json' \
+  -d '{"title":"Hindi note","text":"नमस्ते","source_type":"recording","detected_language":"hi"}'
+```
+
+Before public deployment, add session or authenticated ownership to these endpoints. The current unauthenticated list/search API is appropriate only for local single-user development and must not be exposed as shared public history.
+
+### Neon integration verification
+
+On 2026-11-26, the migration and CRUD API were verified against a Neon PostgreSQL 18.7 database over TLS (`sslmode=require`), with UTF-8 encoding. The `transcriptions` table has the UUID primary key, required metadata columns, `timestamptz` timestamps, database checks, and the created-at/language indexes from migration `20261126_01`.
+
+Live API verification created English, Hindi, and Hindi-English mixed records; confirmed exact Unicode preservation; verified newest-first pagination, search, language filtering, update, delete, invalid-input validation, and unknown-record `404` handling. A remaining test record was retrieved after a FastAPI restart to confirm persistence, then all verification records were deleted. Connection credentials are not documented or committed.
+
 ## Decoding and model guidance
 
 - Faster-Whisper 1.2.1 is installed. Its supported `WhisperModel.transcribe` interface accepts `task="transcribe"`, `language`, `initial_prompt`, and `multilingual`. It has no Hindi-English composite language code.
@@ -138,9 +180,7 @@ Use the supplied benchmark utility with each confirmed file. It emits the actual
 
 ## Browser microphone recording
 
-Select **Record Audio**, grant microphone permission, and use Start/Stop to produce an audio preview. Chrome normally records WebM/Opus while Safari normally records MP4/AAC. SpeechFlow detects a supported browser MIME type and preserves its true file extension. It uses batch uploads, not live streaming, and never uses the browser Web Speech API.
-
-The evaluation panel contains only the four assignment references. Selecting one changes the recognition mode and compares it after real transcription; its reference text is never sent to Faster-Whisper. Its optional Word Error Rate lowercases text, removes punctuation, and applies word-level edit distance. It is not a universal accuracy score: punctuation, transliteration, and different scripts can affect the comparison. Recording and transcription diagnostics are tucked into expandable sections.
+Select **Record Audio**, grant microphone permission, and use Start/Stop to produce an audio preview. Chrome normally records WebM/Opus while Safari normally records MP4/AAC. SpeechFlow detects a supported browser MIME type and preserves its true file extension. It streams PCM microphone audio over WebSocket for live transcription and preserves the completed recording for playback and download; uploaded audio uses the batch endpoint. It never uses the browser Web Speech API.
 
 ## Verification
 
@@ -153,8 +193,8 @@ npx tsc --noEmit
 pytest
 ```
 
-Current automated verification: 31 backend tests, frontend ESLint, TypeScript validation, and the Webpack production build pass.
+Current automated verification: 39 backend tests, live Neon PostgreSQL CRUD/persistence verification, frontend ESLint, TypeScript validation, and the Webpack production build pass.
 
 ## Current boundary
 
-Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, and safe environment configuration are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. PostgreSQL transcript CRUD, history dashboard, cloud deployment, and optional text translation remain upcoming work.
+Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, PostgreSQL transcription CRUD, and safe environment configuration are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. A history dashboard, ownership isolation, cloud deployment, and optional text translation remain upcoming work.
