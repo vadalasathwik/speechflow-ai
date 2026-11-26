@@ -31,10 +31,9 @@ async function readPayload(response: Response): Promise<ErrorPayload | Transcrip
   try { return JSON.parse(body) as ErrorPayload | Transcription; } catch { return null; }
 }
 
-export async function transcribeAudio(apiBaseUrl: string, file: File, language: string): Promise<Transcription> {
+export async function transcribeAudio(apiBaseUrl: string, file: File): Promise<Transcription> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("language", language);
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 180_000);
   try {

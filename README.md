@@ -1,6 +1,6 @@
 # SpeechFlow AI
 
-SpeechFlow AI is an open-source Faster-Whisper speech-to-text application for the Procucev AI Tech Hiring Assignment. The supported recognition scope is English, Hindi, and Hindi-English code-switching. This iteration provides batch transcription from a browser microphone recording or an uploaded audio file; it is not WebSocket streaming.
+SpeechFlow AI is an open-source Faster-Whisper speech-to-text application for the Procucev AI Tech Hiring Assignment. It automatically recognizes English, Hindi, and Hindi-English mixed speech, preserving the original spoken language. It provides buffered near-real-time WebSocket transcription and batch transcription for uploaded audio.
 
 The wider assignment also calls for relational persistence, a transcription dashboard with CRUD, GitHub publication, and cloud deployment. Those are not implemented in this scope-correction task and must be completed separately.
 
@@ -8,7 +8,7 @@ The wider assignment also calls for relational persistence, a transcription dash
 
 ```text
 frontend/  Next.js App Router + TypeScript + Tailwind CSS
-     | HTTP (batch transcription)
+     | HTTP batch upload + WebSocket PCM streaming
 backend/   FastAPI + Pydantic + SQLAlchemy 2.0 + Alembic
      |
 PostgreSQL Docker Compose service
@@ -81,12 +81,11 @@ Set `NEXT_PUBLIC_MAX_AUDIO_DURATION_SECONDS=120` in `frontend/.env.local` to mat
 
 ## Transcription API
 
-`POST /api/transcribe` accepts `multipart/form-data` with a `file` and optional `language`: `auto`, `en`, `hi`, or `hi-en`. Telugu, Tamil, and Urdu are intentionally not exposed by the API or UI. WAV, MP3, M4A, MP4, and WebM are supported. Audio is byte-limited while it is read, decoded through PyAV, and removed after the response.
+`POST /api/transcribe` accepts `multipart/form-data` with a `file`. SpeechFlow automatically detects English, Hindi, and Hindi-English mixed speech and transcribes the original spoken language; it does not translate. WAV, MP3, M4A, MP4, and WebM are supported. Audio is byte-limited while it is read, decoded through PyAV, and removed after the response.
 
 ```bash
 curl -X POST http://localhost:8000/api/transcribe \
   -F 'file=@sample.webm' \
-  -F 'language=auto'
 ```
 
 ```json
@@ -105,10 +104,16 @@ curl -X POST http://localhost:8000/api/transcribe \
 
 The response above is illustrative only, not a measured result. `recognition_mode` is the UI selection, `conditioned_language` is the language supplied to Faster-Whisper (`null` for Auto Detect), and `language` is Faster-Whisper's detected language. A forced-language probability is conditioning metadata, not an independent detection confidence. Whisper language detection is a dominant-language estimate: it does not identify every language used in a code-switched recording.
 
+## Live transcription
+
+The browser captures microphone PCM through an AudioWorklet and streams it to `ws://localhost:8000/ws/transcribe` (or `wss://` in production). The backend runs bounded, overlapping Faster-Whisper windows for provisional text, then transcribes the complete captured session once after Stop for the final result. Completed live recordings are retained in-browser as WAV for playback and download; uploads retain their original file for playback and download.
+
+SpeechFlow uses `task="transcribe"` exclusively. It never automatically translates a transcript. A bounded Hindi corrective pass is used only when an automatic Arabic-script result has meaningful Hindi detection evidence and the candidate produces non-repetitive Devanagari text.
+
 ## Decoding and model guidance
 
 - Faster-Whisper 1.2.1 is installed. Its supported `WhisperModel.transcribe` interface accepts `task="transcribe"`, `language`, `initial_prompt`, and `multilingual`. It has no Hindi-English composite language code.
-- Every request uses `task="transcribe"`; no translation task is used. Hindi-English mixed mode conditions the first pass as Hindi, uses a generic instruction to retain English terms in English, and enables the supported `multilingual=True` option so later audio windows can be language-detected. The generic instruction is not an acceptance reference sentence.
+- Every request uses `task="transcribe"`; no translation task is used. Automatic multilingual decoding uses Faster-Whisper's supported `multilingual=True` option and does not force a Hindi or English language code. The generic mixed-language prompt is not an acceptance reference sentence.
 - The model is initialized lazily once per backend process, inference is bounded to one job by default, and CPU `int8` preserves Apple Silicon compatibility. Keep `WHISPER_MODEL` configurable through `backend/.env`.
 - Provisional deployment choice: **Small** offers the safer latency and memory profile for a CPU deployment. **Large-v3 Turbo** is the candidate for higher Hindi-English quality when the deployment can supply materially more CPU/RAM. Do not promote Turbo as the default until the required recordings establish a measurable accuracy benefit.
 
@@ -148,6 +153,8 @@ npx tsc --noEmit
 pytest
 ```
 
+Current automated verification: 31 backend tests, frontend ESLint, TypeScript validation, and the Webpack production build pass.
+
 ## Current boundary
 
-Batch recognition, local playback/download, audio validation, timestamped segments, repetition checks, and safe environment configuration are implemented. WebSockets, microphone streaming, database transcript CRUD, deployment, and GitHub publication remain outside this task.
+Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, and safe environment configuration are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. PostgreSQL transcript CRUD, history dashboard, cloud deployment, and optional text translation remain upcoming work.

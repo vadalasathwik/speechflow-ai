@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.core.config import Settings, get_settings
-from app.services.script_detection import detect_output_script, script_warning
+from app.services.script_detection import detect_output_script, has_hindi_candidate_evidence, script_warning
 from app.services.transcription_quality import assess_transcription
 
 logger = logging.getLogger(__name__)
@@ -166,16 +166,20 @@ class FasterWhisperTranscriptionService:
                 quality = assess_transcription(text)
                 original_text = None
                 retry_performed = False
-                if (warning or quality.severe_repetition) and self.settings.whisper_enable_script_retry:
+                # Arabic-derived output is retried as Hindi only when Whisper itself detected
+                # Hindi. This repairs a decoder script mismatch without relabelling Urdu audio.
+                hindi_script_mismatch = requested_language == "auto" and has_hindi_candidate_evidence(str(info.language), getattr(info, "all_language_probs", None), output_script)
+                if (warning or quality.severe_repetition or hindi_script_mismatch) and self.settings.whisper_enable_script_retry:
                     retry_performed = True
-                    retry_language = selected_language or str(info.language)
+                    retry_language = "hi" if hindi_script_mismatch else selected_language or str(info.language)
                     retry_prompt = HINDI_ENGLISH_PROMPT if requested_language == "hi-en" else None
                     retry_segments, retry_info = self._run_transcription(model, audio_path, retry_language, retry_prompt, multilingual, beam_size=3, temperature=0.2)
                     retry_results = [SegmentResult(start=float(item.start), end=float(item.end), text=item.text.strip()) for item in retry_segments]
                     retry_text = " ".join(item.text for item in retry_results).strip()
                     retry_script = detect_output_script(retry_text)
                     retry_quality = assess_transcription(retry_text)
-                    if (quality.severe_repetition and not retry_quality.severe_repetition) or (warning and not script_warning(str(retry_info.language), retry_script, recognition_mode)):
+                    retry_is_devanagari = hindi_script_mismatch and retry_script == "Devanagari" and not retry_quality.severe_repetition
+                    if retry_is_devanagari or (quality.severe_repetition and not retry_quality.severe_repetition) or (warning and not script_warning(str(retry_info.language), retry_script, recognition_mode)):
                         original_text = text
                         result_segments, text, output_script, warning, info, quality = retry_results, retry_text, retry_script, script_warning(str(retry_info.language), retry_script, recognition_mode), retry_info, retry_quality
         except ModelInitializationError:

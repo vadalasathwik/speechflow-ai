@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     max_audio_size_mb: int = Field(default=10, ge=1)
     max_audio_duration_seconds: int = Field(default=120, ge=1)
     max_concurrent_transcriptions: int = Field(default=1, ge=1)
+    max_realtime_session_seconds: int = Field(default=300, ge=10)
+    max_realtime_audio_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    realtime_window_seconds: float = Field(default=8.0, ge=2, le=30)
+    realtime_overlap_seconds: float = Field(default=1.0, ge=0, le=5)
 
 
 @lru_cache
