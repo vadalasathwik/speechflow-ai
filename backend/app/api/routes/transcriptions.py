@@ -7,6 +7,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.security import current_session, require_csrf
+from app.models.anonymous_session import AnonymousSession
 from app.models.transcription import SavedTranscription
 from app.schemas.saved_transcription import TranscriptionCreate, TranscriptionPage, TranscriptionRead, TranscriptionUpdate
 
@@ -19,8 +21,8 @@ def missing() -> HTTPException:
 
 
 @router.post("/transcriptions", response_model=TranscriptionRead, status_code=status.HTTP_201_CREATED)
-def create_transcription(payload: TranscriptionCreate, db: Db) -> SavedTranscription:
-    item = SavedTranscription(**payload.model_dump())
+def create_transcription(payload: TranscriptionCreate, db: Db, session: AnonymousSession = Depends(require_csrf)) -> SavedTranscription:
+    item = SavedTranscription(**payload.model_dump(), owner_session_id=session.id)
     try:
         db.add(item)
         db.commit()
@@ -38,8 +40,9 @@ def list_transcriptions(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     search: Annotated[str | None, Query(max_length=255)] = None,
     language: Annotated[str | None, Query(max_length=16)] = None,
+    session: AnonymousSession = Depends(current_session),
 ) -> TranscriptionPage:
-    query = select(SavedTranscription)
+    query = select(SavedTranscription).where(SavedTranscription.owner_session_id == session.id)
     if search:
         pattern = f"%{search}%"
         query = query.where(
@@ -62,16 +65,16 @@ def list_transcriptions(
 
 
 @router.get("/transcriptions/{transcription_id}", response_model=TranscriptionRead)
-def get_transcription(transcription_id: uuid.UUID, db: Db) -> SavedTranscription:
-    item = db.get(SavedTranscription, transcription_id)
+def get_transcription(transcription_id: uuid.UUID, db: Db, session: AnonymousSession = Depends(current_session)) -> SavedTranscription:
+    item = db.scalar(select(SavedTranscription).where(SavedTranscription.id == transcription_id, SavedTranscription.owner_session_id == session.id))
     if item is None:
         raise missing()
     return item
 
 
 @router.patch("/transcriptions/{transcription_id}", response_model=TranscriptionRead)
-def update_transcription(transcription_id: uuid.UUID, payload: TranscriptionUpdate, db: Db) -> SavedTranscription:
-    item = db.get(SavedTranscription, transcription_id)
+def update_transcription(transcription_id: uuid.UUID, payload: TranscriptionUpdate, db: Db, session: AnonymousSession = Depends(require_csrf)) -> SavedTranscription:
+    item = db.scalar(select(SavedTranscription).where(SavedTranscription.id == transcription_id, SavedTranscription.owner_session_id == session.id))
     if item is None:
         raise missing()
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -86,8 +89,8 @@ def update_transcription(transcription_id: uuid.UUID, payload: TranscriptionUpda
 
 
 @router.delete("/transcriptions/{transcription_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_transcription(transcription_id: uuid.UUID, db: Db) -> None:
-    item = db.get(SavedTranscription, transcription_id)
+def delete_transcription(transcription_id: uuid.UUID, db: Db, session: AnonymousSession = Depends(require_csrf)) -> None:
+    item = db.scalar(select(SavedTranscription).where(SavedTranscription.id == transcription_id, SavedTranscription.owner_session_id == session.id))
     if item is None:
         raise missing()
     try:
