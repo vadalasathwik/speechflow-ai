@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     whisper_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
     whisper_condition_on_previous_text: bool = False
     whisper_enable_script_retry: bool = True
+    whisper_warmup_on_start: bool = False
     max_audio_size_mb: int = Field(default=10, ge=1)
     max_audio_duration_seconds: int = Field(default=120, ge=1)
     max_concurrent_transcriptions: int = Field(default=1, ge=1)

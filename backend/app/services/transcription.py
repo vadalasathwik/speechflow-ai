@@ -133,6 +133,10 @@ class FasterWhisperTranscriptionService:
                     raise ModelInitializationError("Speech recognition model is unavailable.") from exc
         return self._model
 
+    def warm_up(self) -> None:
+        """Load the approved model during controlled process startup."""
+        self._get_model()
+
     def _run_transcription(self, model: object, audio_path: Path, language: str | None, initial_prompt: str | None, multilingual: bool, beam_size: int | None = None, temperature: float | None = None):
         return model.transcribe(
             str(audio_path), task="transcribe", language=language,
