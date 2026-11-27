@@ -146,6 +146,14 @@ curl -X POST http://localhost:8000/api/transcriptions \
 
 Before public deployment, add session or authenticated ownership to these endpoints. The current unauthenticated list/search API is appropriate only for local single-user development and must not be exposed as shared public history.
 
+## Transcription history dashboard
+
+The web app has two primary workspaces: **Transcribe** and **History**. The Transcribe workspace preserves the existing Record Audio and Upload Audio flow. Once a live session has finalized or an upload has completed, **Save Transcription** stores only the transcript and recognition metadata; browser audio remains available for playback/download but is never stored in PostgreSQL.
+
+History uses the FastAPI CRUD API through `NEXT_PUBLIC_API_BASE_URL`, never a direct database connection. It provides newest-first cards, total count, debounced search, detected-language filtering, pagination, complete-text viewing, Unicode-safe copying, editing, and confirmed deletion. It handles loading, empty, no-results, and retryable network-error states. Historical audio playback is intentionally unavailable because audio is not persisted.
+
+**Deployment blocker:** the API has no visitor ownership checks. Keep History local until Phase 6 adds an anonymous, secure, HttpOnly session identifier (or authentication) and filters every list/read/update/delete operation by that owner. Do not deploy the unrestricted history API publicly.
+
 ### Neon integration verification
 
 On 2026-11-26, the migration and CRUD API were verified against a Neon PostgreSQL 18.7 database over TLS (`sslmode=require`), with UTF-8 encoding. The `transcriptions` table has the UUID primary key, required metadata columns, `timestamptz` timestamps, database checks, and the created-at/language indexes from migration `20261126_01`.
@@ -193,8 +201,8 @@ npx tsc --noEmit
 pytest
 ```
 
-Current automated verification: 39 backend tests, live Neon PostgreSQL CRUD/persistence verification, frontend ESLint, TypeScript validation, and the Webpack production build pass.
+Current automated verification: 39 backend tests, live Neon PostgreSQL CRUD/persistence verification, frontend ESLint, TypeScript validation, and the Webpack production build pass. Browser microphone verification still depends on browser permission and a real microphone.
 
 ## Current boundary
 
-Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, PostgreSQL transcription CRUD, and safe environment configuration are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. A history dashboard, ownership isolation, cloud deployment, and optional text translation remain upcoming work.
+Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, PostgreSQL transcription CRUD, and the local History dashboard are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. Ownership isolation, cloud deployment, and optional text translation remain upcoming work.
