@@ -18,9 +18,10 @@ function wavFile(chunks: Float32Array[], sampleRate: number): File {
   return new File([bytes], `speechflow-recording-${stamp}.wav`, { type: "audio/wav" });
 }
 
-function websocketEndpoint(api?: string): string | undefined {
-  if (!api) return undefined;
-  const url = new URL(api);
+function websocketEndpoint(api?: string): string {
+  // An empty API base intentionally means the same public origin. This keeps the
+  // WebSocket, session cookie, and CSRF Origin on one site behind the demo proxy.
+  const url = new URL(api || window.location.origin, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/ws/transcribe";
   return url.toString();
@@ -81,7 +82,6 @@ export function useLiveTranscription() {
 
   const start = useCallback(async () => {
     const address = websocketEndpoint(process.env.NEXT_PUBLIC_API_BASE_URL);
-    if (!address) { setError("NEXT_PUBLIC_API_BASE_URL is not configured."); return; }
     clear(); setStatus("connecting");
     try {
       const input = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });

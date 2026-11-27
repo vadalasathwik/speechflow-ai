@@ -1,0 +1,7 @@
+# Local, single-origin entry point for the temporary Cloudflare Quick Tunnel.
+# Caddy transparently forwards WebSocket upgrades for /ws/transcribe.
+:8080 {
+	@backend path /api/* /ws/*
+	reverse_proxy @backend 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:3000
+}

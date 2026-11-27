@@ -1,0 +1,12 @@
+.env
+.venv
+__pycache__
+**/__pycache__
+tests
+*.pyc
+model-cache
+models
+*.wav
+*.mp3
+*.m4a
+*.webm

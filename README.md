@@ -2,7 +2,7 @@
 
 SpeechFlow AI is an open-source Faster-Whisper speech-to-text application for the Procucev AI Tech Hiring Assignment. It automatically recognizes English, Hindi, and Hindi-English mixed speech, preserving the original spoken language. It provides buffered near-real-time WebSocket transcription and batch transcription for uploaded audio.
 
-The wider assignment also calls for a transcription history dashboard, GitHub publication, and cloud deployment. Persistent PostgreSQL CRUD is implemented; the dashboard and deployment remain future phases.
+The application includes a responsive Transcribe/History workspace, persistent PostgreSQL CRUD, and anonymous-session ownership protection. A free Cloudflare Quick Tunnel runbook is available for temporary demos; it is not a persistent cloud deployment.
 
 ## Architecture
 
@@ -56,6 +56,16 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+### Local same-origin Caddy mode
+
+To exercise the browser against the same routing used by the temporary demo, leave `NEXT_PUBLIC_API_BASE_URL` empty, add `http://localhost:8080` to `ALLOWED_ORIGINS`, start FastAPI on `127.0.0.1:8000`, then run:
+
+```bash
+caddy run --config demo/Caddyfile --adapter caddyfile
+```
+
+Open [http://localhost:8080](http://localhost:8080). The browser uses `/api` and `ws://localhost:8080/ws/transcribe`; Caddy proxies those paths to FastAPI. The websocket is deliberately separate from Next.js development hot-reload sockets.
+
 If Python 3.13 is absent, install it with Homebrew, then recreate the project environment:
 
 ```bash
@@ -73,7 +83,7 @@ backend/.venv/bin/pip install -e 'backend[dev]'
 | `backend/.env` | API settings, CORS origins, database URL |
 | `frontend/.env.local` | Browser-visible backend base URL |
 
-`ALLOWED_ORIGINS` is a JSON list, e.g. `ALLOWED_ORIGINS=["http://localhost:3000"]`.
+`ALLOWED_ORIGINS` is a JSON list, e.g. `ALLOWED_ORIGINS=["http://localhost:3000","http://localhost:8080"]` when local Caddy is used. Do not use a wildcard.
 
 ### Neon PostgreSQL
 
@@ -144,7 +154,7 @@ curl -X POST http://localhost:8000/api/transcriptions \
   -d '{"title":"Hindi note","text":"नमस्ते","source_type":"recording","detected_language":"hi"}'
 ```
 
-Before public deployment, add session or authenticated ownership to these endpoints. The current unauthenticated list/search API is appropriate only for local single-user development and must not be exposed as shared public history.
+Anonymous-session ownership now scopes every transcription CRUD query on the server. The browser never supplies an owner ID; the session cookie and CSRF checks described below are required for History mutations. Existing records created before the ownership migration remain unowned and are intentionally not exposed to new visitors.
 
 ## Transcription history dashboard
 
@@ -152,7 +162,7 @@ The web app has two primary workspaces: **Transcribe** and **History**. The Tran
 
 History uses the FastAPI CRUD API through `NEXT_PUBLIC_API_BASE_URL`, never a direct database connection. It provides newest-first cards, total count, debounced search, detected-language filtering, pagination, complete-text viewing, Unicode-safe copying, editing, and confirmed deletion. It handles loading, empty, no-results, and retryable network-error states. Historical audio playback is intentionally unavailable because audio is not persisted.
 
-**Deployment blocker:** the API has no visitor ownership checks. Keep History local until Phase 6 adds an anonymous, secure, HttpOnly session identifier (or authentication) and filters every list/read/update/delete operation by that owner. Do not deploy the unrestricted history API publicly.
+The interface keeps navigation icons explicitly constrained, retains visible recording/timer/waveform controls, and has layout guards for narrow phone, tablet, and desktop widths. Historical data remains protected by the anonymous-session ownership rules below.
 
 ## Anonymous session security
 
@@ -160,15 +170,21 @@ History now creates an opaque browser session through `GET /api/session`. The se
 
 All history reads are scoped to the current session. Create, edit, and delete additionally require a matching `X-CSRF-Token` and an `Origin` in `ALLOWED_ORIGINS`. Sessions have a fixed, explicit `SESSION_DURATION_DAYS` lifetime; an expired session receives `401` and the browser can bootstrap a new empty session.
 
-For local development, use `SESSION_COOKIE_SAMESITE=lax` and `http://localhost:3000` in `ALLOWED_ORIGINS`. Production requires a unique `SESSION_TOKEN_PEPPER`, HTTPS cookies, and explicit origins. Prefer hosting frontend and API under the same site. If separate Vercel/API domains are unavoidable, configure `SESSION_COOKIE_SAMESITE=none`, `Secure` cookies, exact CORS origins, and retain the CSRF header/origin checks. Never use wildcard origins with credentialed cookies.
+For local development, use `SESSION_COOKIE_SAMESITE=lax` and list every actual browser origin in `ALLOWED_ORIGINS`: `http://localhost:3000` for direct Next.js and `http://localhost:8080` for the local Caddy entry point. Production requires a unique `SESSION_TOKEN_PEPPER`, HTTPS cookies, and explicit origins. Prefer hosting frontend and API under the same site. If separate Vercel/API domains are unavoidable, configure `SESSION_COOKIE_SAMESITE=none`, `Secure` cookies, exact CORS origins, and retain the CSRF header/origin checks. Never use wildcard origins with credentialed cookies.
 
 ### Deployment preparation
 
 The verified 2026-11-27 Neon test used two independent cookie jars: Session A created, read, updated, and deleted its record; Session B saw an empty history and received `404` for A's UUID on read, edit, and delete. Cross-session CSRF reuse, missing CSRF, and missing sessions were blocked.
 
-For the current CPU INT8 Large-v3 Turbo model, deploy the FastAPI service as a long-lived WebSocket-capable container/web service, not a serverless function. Render is a practical starting choice because it supports FastAPI WebSockets and HTTPS web services. Allocate at least **4 GB RAM and 2 vCPU** for a single-worker pilot; use **8 GB RAM / 4 vCPU** if model loading or concurrent inference needs headroom. Free 512 MB services are unsuitable. Model files must be built into a controlled image or loaded to a persistent cache during deploy; do not download models at request time.
+For the current CPU INT8 Large-v3 Turbo model, use a long-lived, WebSocket-capable process rather than a serverless function. One worker needs roughly **1,939 MiB RSS** locally before application overhead, so free low-memory compute is not a realistic persistent host. Keep model files in a controlled cache and never download them on individual transcription requests.
 
-Recommended topology: `app.example.com` for Next.js and `api.example.com` for FastAPI, both under the same registrable domain. Set `NEXT_PUBLIC_API_BASE_URL=https://api.example.com`, `ALLOWED_ORIGINS=["https://app.example.com"]`, `ENVIRONMENT=production`, a unique `SESSION_TOKEN_PEPPER`, `SESSION_COOKIE_SAMESITE=lax` for same-site subdomains, and the existing secret `DATABASE_URL` only in backend hosting settings. Start the API with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, expose `/api/health`, run `alembic upgrade head` as a release step, and use `wss://` from HTTPS frontend deployments. Do not publish until production cookie/CORS settings and browser isolation are rechecked.
+For a no-cost, temporary recruiter demonstration from the development Mac, use the single-origin Cloudflare Quick Tunnel runbook in [FREE_DEMO.md](FREE_DEMO.md). It routes both REST and WebSocket traffic through a local Caddy proxy, retains the existing secure first-party session/CSRF design, and requires no domain, account, payment method, or model download. It is not a permanent deployment.
+
+### Phase 6B deployment checklist
+
+**Measured local model evidence (2026-11-27):** the already downloaded Large-v3 Turbo model, CPU INT8, initialized in 1.42 seconds with 1,939 MiB peak process RSS on the development Mac. No local Small model or confirmed English/Hindi/mixed recordings were available, so comparative latency, short-clip behavior, Hindi-script accuracy, and mixed-language preservation benchmarks are intentionally unreported. Do not change the default from this evidence alone. For the most economical assignment deployment, benchmark the existing Small model first when it is available; it should reduce memory/cost but may reduce Hindi-English quality. Keep Turbo for quality only when measured recordings justify its capacity cost.
+
+The repository includes `backend/Dockerfile` for Python 3.13, one Uvicorn worker, `$PORT`, proxy headers, a `/api/health` container check, and no embedded secrets/models. Build from `backend/` with `docker build -t speechflow-api .`. The image deliberately excludes model weights and configures `HF_HOME=/var/cache/speechflow/huggingface`; mount that path on a persistent disk or bake an already-approved model into a private build artifact. Set `WHISPER_WARMUP_ON_START=true` only after the approved model/cache is present: a named model is then resolved during controlled process startup, not during a transcription request. Run migrations as a release command: `alembic upgrade head`; then start the container and configure `/api/health` as the provider health check.
 
 ### Neon integration verification
 
@@ -217,8 +233,8 @@ npx tsc --noEmit
 pytest
 ```
 
-Current automated verification: 39 backend tests, live Neon PostgreSQL CRUD/persistence verification, frontend ESLint, TypeScript validation, and the Webpack production build pass. Browser microphone verification still depends on browser permission and a real microphone.
+Current automated verification: **45 backend tests** (including local Caddy-origin WebSocket acceptance and unlisted-origin rejection), frontend ESLint, TypeScript validation, and the Webpack production build pass. The live public WSS protocol was verified through Cloudflare Quick Tunnel with `start → ready → cancel → completed`; full microphone capture, English/Hindi/mixed live recognition, and browser playback/download require a real microphone-capable browser and are not claimed as automated results.
 
 ## Current boundary
 
-Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, PostgreSQL transcription CRUD, and the local History dashboard are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. Ownership isolation, cloud deployment, and optional text translation remain upcoming work.
+Automatic English/Hindi recognition, Hindi-English mixed recognition, live partial/final transcription, upload validation, timestamped segments, repetition checks, recording playback/download, PostgreSQL transcription CRUD, History, and anonymous-session ownership isolation are implemented. Recognition quality still depends on real audio, accents, microphone quality, and the configured model; short Hindi clips may be confused with Urdu acoustically and require representative audio validation. The Quick Tunnel is temporary and locally hosted, so persistent cloud deployment and optional translation remain out of scope.
