@@ -53,6 +53,9 @@ export function useLiveTranscription() {
   const sampleRate = useRef(0);
   const capturedSamples = useRef(0);
   const maxCapturedSamples = useRef(0);
+  const statusRef = useRef<Status>("idle");
+  const intentionalClosures = useRef<WeakSet<WebSocket>>(new WeakSet());
+  const setLiveStatus = useCallback((next: Status) => { statusRef.current = next; setStatus(next); }, []);
 
   const stopVisuals = useCallback(() => {
     if (animation.current) cancelAnimationFrame(animation.current);
@@ -72,17 +75,31 @@ export function useLiveTranscription() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null); setRecording(null); capturedFrames.current = []; capturedSamples.current = 0; setCapturedSampleCount(0);
   }, [previewUrl]);
+  const closeSocket = useCallback((candidate?: WebSocket | null) => {
+    const current = candidate ?? socket.current;
+    if (!current) return;
+    intentionalClosures.current.add(current);
+    if (socket.current === current) socket.current = null;
+    if (current.readyState === WebSocket.CONNECTING || current.readyState === WebSocket.OPEN) current.close();
+  }, []);
   const closeSession = useCallback(() => {
     releaseCapture();
     if (finalizationTimer.current) clearTimeout(finalizationTimer.current);
     finalizationTimer.current = null;
-    socket.current?.close(); socket.current = null;
-  }, [releaseCapture]);
-  const clear = useCallback(() => { closeSession(); clearRecording(); stopSent.current = false; setPartial(""); setFinalText(""); setDetectedLanguage(null); setLanguageProbability(null); setError(null); setDuration(0); setStatus("idle"); }, [clearRecording, closeSession]);
+    closeSocket();
+  }, [closeSocket, releaseCapture]);
+  const failSession = useCallback((current: WebSocket, message: string) => {
+    if (socket.current !== current || intentionalClosures.current.has(current)) return;
+    setError(message);
+    closeSession();
+    setLiveStatus("error");
+  }, [closeSession, setLiveStatus]);
+  const clear = useCallback(() => { closeSession(); clearRecording(); stopSent.current = false; setPartial(""); setFinalText(""); setDetectedLanguage(null); setLanguageProbability(null); setError(null); setDuration(0); setLiveStatus("idle"); }, [clearRecording, closeSession, setLiveStatus]);
 
   const start = useCallback(async () => {
+    if (["connecting", "recording", "stopping"].includes(statusRef.current)) return;
     const address = websocketEndpoint(process.env.NEXT_PUBLIC_API_BASE_URL);
-    clear(); setStatus("connecting");
+    clear(); setLiveStatus("connecting");
     try {
       const input = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       media.current = input;
@@ -91,7 +108,7 @@ export function useLiveTranscription() {
       const source = audio.createMediaStreamSource(input), analyser = audio.createAnalyser(), processor = new AudioWorkletNode(audio, "pcm-recorder");
       analyser.fftSize = 512; source.connect(analyser); source.connect(processor); worklet.current = processor;
       const ws = new WebSocket(address); socket.current = ws;
-      ws.onopen = () => ws.send(JSON.stringify({ type: "start", sample_rate: audio.sampleRate, channels: 1, pcm_format: "s16le" }));
+      ws.onopen = () => { if (socket.current === ws) ws.send(JSON.stringify({ type: "start", sample_rate: audio.sampleRate, channels: 1, pcm_format: "s16le" })); };
       processor.port.onmessage = ({ data }: MessageEvent<Float32Array>) => {
         if (!acceptingAudio.current || ws.readyState !== WebSocket.OPEN) return;
         if (capturedSamples.current + data.length <= maxCapturedSamples.current) { capturedFrames.current.push(data.slice()); capturedSamples.current += data.length; if (capturedSamples.current % 4096 < data.length) setCapturedSampleCount(capturedSamples.current); }
@@ -100,28 +117,30 @@ export function useLiveTranscription() {
         ws.send(pcm.buffer);
       };
       ws.onmessage = ({ data }) => {
+        if (socket.current !== ws) return;
         const message = JSON.parse(data) as ServerMessage;
-        if (message.type === "ready") { acceptingAudio.current = true; startedAt.current = performance.now(); setStatus("recording"); timer.current = window.setInterval(() => setDuration((performance.now() - startedAt.current) / 1000), 100); }
+        if (message.type === "ready") { acceptingAudio.current = true; setError(null); startedAt.current = performance.now(); setLiveStatus("recording"); timer.current = window.setInterval(() => setDuration((performance.now() - startedAt.current) / 1000), 100); }
         if (message.type === "partial") setPartial(message.text ?? "");
         if (message.type === "final") { if (message.text) setFinalText(message.text); setPartial(""); }
         if (message.detected_language) { setDetectedLanguage(message.detected_language); setLanguageProbability(message.language_probability ?? null); }
-        if (message.type === "completed") { if (message.text) setFinalText(message.text); closeSession(); setStatus(message.type === "completed" ? "completed" : "cancelled"); }
-        if (message.type === "error") { setError(message.message ?? "Live transcription failed."); closeSession(); setStatus("error"); }
+        if (message.type === "completed") { if (message.text) setFinalText(message.text); closeSession(); setLiveStatus("completed"); }
+        if (message.type === "error") failSession(ws, message.message ?? "Live transcription failed.");
       };
-      ws.onerror = () => { setError("WebSocket connection failed. Confirm the backend is running."); closeSession(); setStatus("error"); };
+      ws.onerror = () => failSession(ws, statusRef.current === "connecting" ? "Unable to connect to the transcription service. Please try again." : "Live transcription connection was interrupted.");
+      ws.onclose = () => failSession(ws, statusRef.current === "connecting" ? "Unable to connect to the transcription service. Please try again." : "Live transcription connection was interrupted.");
       const draw = () => { const values = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(values); setLevel(Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / values.length)); animation.current = requestAnimationFrame(draw); }; draw();
-    } catch (cause) { setError(cause instanceof DOMException && cause.name === "NotAllowedError" ? "Microphone permission was denied." : "Unable to start live transcription."); closeSession(); setStatus("error"); }
-  }, [clear, closeSession]);
+    } catch (cause) { setError(cause instanceof DOMException && cause.name === "NotAllowedError" ? "Microphone permission was denied." : "Unable to initialize microphone recording. Please try again."); closeSession(); setLiveStatus("error"); }
+  }, [clear, closeSession, failSession, setLiveStatus]);
 
   const stop = useCallback(() => {
     const ws = socket.current;
     if (stopSent.current || !ws || ws.readyState !== WebSocket.OPEN) return;
-    stopSent.current = true; setStatus("stopping");
+    stopSent.current = true; setLiveStatus("stopping");
     if (capturedFrames.current.length && sampleRate.current) { const file = wavFile(capturedFrames.current, sampleRate.current); if (previewUrl) URL.revokeObjectURL(previewUrl); setRecording(file); setPreviewUrl(URL.createObjectURL(file)); }
     releaseCapture();
     ws.send(JSON.stringify({ type: "stop" }));
-    finalizationTimer.current = window.setTimeout(() => { setError("Finalization timed out. Any received transcript was preserved."); ws.close(); setStatus("error"); }, 45_000);
-  }, [previewUrl, releaseCapture]);
+    finalizationTimer.current = window.setTimeout(() => failSession(ws, "Finalization timed out. Any received transcript was preserved."), 45_000);
+  }, [failSession, previewUrl, releaseCapture, setLiveStatus]);
   useEffect(() => () => { closeSession(); }, [closeSession]);
   return { status, partial, finalText, detectedLanguage, languageProbability, error, duration, level, recording, previewUrl, capturedSamples: capturedSampleCount, start, stop, clear };
 }
