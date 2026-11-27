@@ -41,6 +41,8 @@ export type HistoryQuery = { page: number; pageSize: number; search?: string; la
 
 type FastApiDetail = string | { msg?: string }[];
 type ErrorPayload = { detail?: FastApiDetail };
+let csrfToken: string | null = null;
+let sessionPromise: Promise<void> | null = null;
 
 function detailMessage(payload: ErrorPayload | null): string | undefined {
   if (typeof payload?.detail === "string") return payload.detail;
@@ -55,11 +57,13 @@ async function readPayload(response: Response): Promise<ErrorPayload | Transcrip
 }
 
 async function historyRequest<T>(apiBaseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
+  await ensureHistorySession(apiBaseUrl);
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl}/api/transcriptions${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init.headers },
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken ?? "", ...init.headers },
     });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
@@ -68,6 +72,20 @@ async function historyRequest<T>(apiBaseUrl: string, path: string, init: Request
   const payload = await readPayload(response);
   if (response.ok) return payload as T;
   throw new Error(detailMessage(payload as ErrorPayload | null) || `History request failed (${response.status}).`);
+}
+
+async function ensureHistorySession(apiBaseUrl: string): Promise<void> {
+  if (csrfToken) return;
+  if (!sessionPromise) {
+    sessionPromise = fetch(`${apiBaseUrl}/api/session`, { credentials: "include" })
+      .then(async (response) => {
+        const payload = await response.json() as { csrf_token?: string };
+        if (!response.ok || !payload.csrf_token) throw new Error("Unable to establish a secure local session.");
+        csrfToken = payload.csrf_token;
+      })
+      .finally(() => { sessionPromise = null; });
+  }
+  return sessionPromise;
 }
 
 export function createSavedTranscription(apiBaseUrl: string, payload: CreateSavedTranscription, signal?: AbortSignal): Promise<SavedTranscription> {

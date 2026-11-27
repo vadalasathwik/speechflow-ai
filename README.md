@@ -154,6 +154,22 @@ History uses the FastAPI CRUD API through `NEXT_PUBLIC_API_BASE_URL`, never a di
 
 **Deployment blocker:** the API has no visitor ownership checks. Keep History local until Phase 6 adds an anonymous, secure, HttpOnly session identifier (or authentication) and filters every list/read/update/delete operation by that owner. Do not deploy the unrestricted history API publicly.
 
+## Anonymous session security
+
+History now creates an opaque browser session through `GET /api/session`. The server issues an expiring HttpOnly session cookie and a separate CSRF cookie/header token; only an HMAC-SHA256 hash of the session token, protected by `SESSION_TOKEN_PEPPER`, is stored in PostgreSQL. New saved transcriptions are associated with that server-side session. Existing transcripts remain unowned and intentionally invisible to new sessions.
+
+All history reads are scoped to the current session. Create, edit, and delete additionally require a matching `X-CSRF-Token` and an `Origin` in `ALLOWED_ORIGINS`. Sessions have a fixed, explicit `SESSION_DURATION_DAYS` lifetime; an expired session receives `401` and the browser can bootstrap a new empty session.
+
+For local development, use `SESSION_COOKIE_SAMESITE=lax` and `http://localhost:3000` in `ALLOWED_ORIGINS`. Production requires a unique `SESSION_TOKEN_PEPPER`, HTTPS cookies, and explicit origins. Prefer hosting frontend and API under the same site. If separate Vercel/API domains are unavoidable, configure `SESSION_COOKIE_SAMESITE=none`, `Secure` cookies, exact CORS origins, and retain the CSRF header/origin checks. Never use wildcard origins with credentialed cookies.
+
+### Deployment preparation
+
+The verified 2026-11-27 Neon test used two independent cookie jars: Session A created, read, updated, and deleted its record; Session B saw an empty history and received `404` for A's UUID on read, edit, and delete. Cross-session CSRF reuse, missing CSRF, and missing sessions were blocked.
+
+For the current CPU INT8 Large-v3 Turbo model, deploy the FastAPI service as a long-lived WebSocket-capable container/web service, not a serverless function. Render is a practical starting choice because it supports FastAPI WebSockets and HTTPS web services. Allocate at least **4 GB RAM and 2 vCPU** for a single-worker pilot; use **8 GB RAM / 4 vCPU** if model loading or concurrent inference needs headroom. Free 512 MB services are unsuitable. Model files must be built into a controlled image or loaded to a persistent cache during deploy; do not download models at request time.
+
+Recommended topology: `app.example.com` for Next.js and `api.example.com` for FastAPI, both under the same registrable domain. Set `NEXT_PUBLIC_API_BASE_URL=https://api.example.com`, `ALLOWED_ORIGINS=["https://app.example.com"]`, `ENVIRONMENT=production`, a unique `SESSION_TOKEN_PEPPER`, `SESSION_COOKIE_SAMESITE=lax` for same-site subdomains, and the existing secret `DATABASE_URL` only in backend hosting settings. Start the API with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, expose `/api/health`, run `alembic upgrade head` as a release step, and use `wss://` from HTTPS frontend deployments. Do not publish until production cookie/CORS settings and browser isolation are rechecked.
+
 ### Neon integration verification
 
 On 2026-11-26, the migration and CRUD API were verified against a Neon PostgreSQL 18.7 database over TLS (`sslmode=require`), with UTF-8 encoding. The `transcriptions` table has the UUID primary key, required metadata columns, `timestamptz` timestamps, database checks, and the created-at/language indexes from migration `20261126_01`.

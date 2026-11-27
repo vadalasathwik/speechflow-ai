@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.health import router as health_router
+from app.api.routes.session import router as session_router
 from app.api.routes.transcription import router as transcription_router
 from app.api.routes.transcriptions import router as transcriptions_router
 from app.api.routes.realtime import router as realtime_router
@@ -19,6 +20,7 @@ def create_application() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health_router, prefix=settings.api_v1_prefix)
+    app.include_router(session_router, prefix=settings.api_v1_prefix)
     app.include_router(transcription_router, prefix=settings.api_v1_prefix)
     app.include_router(transcriptions_router, prefix=settings.api_v1_prefix)
     app.include_router(realtime_router)

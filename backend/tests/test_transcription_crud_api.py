@@ -6,7 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.session import get_db
+from app.core.security import current_session, require_csrf
 from app.main import app
+from app.models.anonymous_session import AnonymousSession
 from app.models.transcription import SavedTranscription
 
 
@@ -39,6 +41,9 @@ class FakeSession:
         self.items.pop(item.id, None)
 
     def scalar(self, _statement: object) -> int:
+        descriptions = getattr(_statement, "column_descriptions", [])
+        if descriptions and descriptions[0].get("entity") is SavedTranscription:
+            return next(iter(self.items.values()), None)  # type: ignore[return-value]
         return len(self.items)
 
     def scalars(self, _statement: object) -> list[SavedTranscription]:
@@ -51,11 +56,14 @@ class FakeSession:
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     database = FakeSession()
+    session = AnonymousSession(id=uuid4(), token_hash="test", expires_at=datetime.now(UTC))
 
     def override_get_db() -> Generator[FakeSession, None, None]:
         yield database
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[current_session] = lambda: session
+    app.dependency_overrides[require_csrf] = lambda: session
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
