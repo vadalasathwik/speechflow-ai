@@ -16,6 +16,29 @@ export type Transcription = {
   segments: { start: number; end: number; text: string }[];
 };
 
+export type SavedTranscription = {
+  id: string;
+  title: string;
+  text: string;
+  detected_language: string | null;
+  source_type: "recording" | "upload";
+  duration_seconds: number | null;
+  model_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SavedTranscriptionPage = {
+  items: SavedTranscription[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type CreateSavedTranscription = Pick<SavedTranscription, "title" | "text" | "detected_language" | "source_type" | "duration_seconds" | "model_name">;
+export type UpdateSavedTranscription = Pick<SavedTranscription, "title" | "text">;
+export type HistoryQuery = { page: number; pageSize: number; search?: string; language?: string };
+
 type FastApiDetail = string | { msg?: string }[];
 type ErrorPayload = { detail?: FastApiDetail };
 
@@ -29,6 +52,45 @@ async function readPayload(response: Response): Promise<ErrorPayload | Transcrip
   const body = await response.text();
   if (!body) return null;
   try { return JSON.parse(body) as ErrorPayload | Transcription; } catch { return null; }
+}
+
+async function historyRequest<T>(apiBaseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/api/transcriptions${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...init.headers },
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new Error("Cannot reach the SpeechFlow API. Confirm the backend is running and permits this frontend origin.");
+  }
+  const payload = await readPayload(response);
+  if (response.ok) return payload as T;
+  throw new Error(detailMessage(payload as ErrorPayload | null) || `History request failed (${response.status}).`);
+}
+
+export function createSavedTranscription(apiBaseUrl: string, payload: CreateSavedTranscription, signal?: AbortSignal): Promise<SavedTranscription> {
+  return historyRequest<SavedTranscription>(apiBaseUrl, "", { method: "POST", body: JSON.stringify(payload), signal });
+}
+
+export function listSavedTranscriptions(apiBaseUrl: string, query: HistoryQuery, signal?: AbortSignal): Promise<SavedTranscriptionPage> {
+  const params = new URLSearchParams({ page: String(query.page), page_size: String(query.pageSize) });
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  if (query.language) params.set("language", query.language);
+  return historyRequest<SavedTranscriptionPage>(apiBaseUrl, `?${params.toString()}`, { signal });
+}
+
+export function getSavedTranscription(apiBaseUrl: string, id: string, signal?: AbortSignal): Promise<SavedTranscription> {
+  return historyRequest<SavedTranscription>(apiBaseUrl, `/${encodeURIComponent(id)}`, { signal });
+}
+
+export function updateSavedTranscription(apiBaseUrl: string, id: string, payload: UpdateSavedTranscription, signal?: AbortSignal): Promise<SavedTranscription> {
+  return historyRequest<SavedTranscription>(apiBaseUrl, `/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload), signal });
+}
+
+export function deleteSavedTranscription(apiBaseUrl: string, id: string, signal?: AbortSignal): Promise<void> {
+  return historyRequest<void>(apiBaseUrl, `/${encodeURIComponent(id)}`, { method: "DELETE", signal });
 }
 
 export async function transcribeAudio(apiBaseUrl: string, file: File): Promise<Transcription> {
